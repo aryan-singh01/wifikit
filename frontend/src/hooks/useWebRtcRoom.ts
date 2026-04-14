@@ -9,19 +9,8 @@ import type {
 } from '@/types/signaling';
 
 type Role = 'sender' | 'viewer';
-
-type UseWebRtcRoomOptions = {
-  role: Role;
-  signalingUrl: string;
-};
-
-type ConnectionStatus =
-  | 'idle'
-  | 'connecting'
-  | 'joined'
-  | 'streaming'
-  | 'error'
-  | 'stopped';
+type UseWebRtcRoomOptions = { role: Role; signalingUrl: string };
+type ConnectionStatus = 'idle' | 'connecting' | 'joined' | 'streaming' | 'error' | 'stopped';
 
 const senderOfferNeeded = (state: RTCPeerConnectionState) =>
   state === 'new' || state === 'connecting' || state === 'disconnected';
@@ -33,6 +22,12 @@ export function useWebRtcRoom({ role, signalingUrl }: UseWebRtcRoomOptions) {
   const remoteStreamRef = useRef<MediaStream | null>(null);
   const statsTimerRef = useRef<number | null>(null);
   const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+
+  // ─── Refs that shadow state so async callbacks always read current values ───
+  const otherPeerIdRef = useRef<string | null>(null);
+  const isStreamingRef = useRef(false);
+  const statusRef = useRef<ConnectionStatus>('idle');
+
   const [roomId, setRoomId] = useState('room-01');
   const [peerId, setPeerId] = useState<string | null>(null);
   const [otherPeerId, setOtherPeerId] = useState<string | null>(null);
@@ -42,6 +37,20 @@ export function useWebRtcRoom({ role, signalingUrl }: UseWebRtcRoomOptions) {
   const [isStreaming, setIsStreaming] = useState(false);
   const [fps, setFps] = useState<number | null>(null);
   const [resolution, setResolution] = useState<string>('—');
+
+  // Keep refs in sync with state
+  const setOtherPeerIdBoth = useCallback((id: string | null) => {
+    otherPeerIdRef.current = id;
+    setOtherPeerId(id);
+  }, []);
+  const setStatusBoth = useCallback((s: ConnectionStatus) => {
+    statusRef.current = s;
+    setStatus(s);
+  }, []);
+  const setIsStreamingBoth = useCallback((v: boolean) => {
+    isStreamingRef.current = v;
+    setIsStreaming(v);
+  }, []);
 
   const sendMessage = useCallback((message: ClientToServerMessage) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -63,10 +72,11 @@ export function useWebRtcRoom({ role, signalingUrl }: UseWebRtcRoomOptions) {
     }
     pcRef.current?.close();
     pcRef.current = null;
+    pendingIceCandidatesRef.current = [];
   }, []);
 
   const stopLocalTracks = useCallback(() => {
-    localStreamRef.current?.getTracks().forEach((track) => track.stop());
+    localStreamRef.current?.getTracks().forEach((t) => t.stop());
     localStreamRef.current = null;
   }, []);
 
@@ -74,26 +84,23 @@ export function useWebRtcRoom({ role, signalingUrl }: UseWebRtcRoomOptions) {
     closePeerConnection();
     stopLocalTracks();
     remoteStreamRef.current = null;
-    setIsStreaming(false);
-    setStatus('stopped');
+    setIsStreamingBoth(false);
+    setStatusBoth('stopped');
     setFps(null);
-  }, [closePeerConnection, stopLocalTracks]);
+  }, [closePeerConnection, setIsStreamingBoth, setStatusBoth, stopLocalTracks]);
 
   const attachStats = useCallback(() => {
     if (!pcRef.current || role !== 'sender') return;
-
-    if (statsTimerRef.current) {
-      window.clearInterval(statsTimerRef.current);
-    }
+    if (statsTimerRef.current) window.clearInterval(statsTimerRef.current);
 
     statsTimerRef.current = window.setInterval(async () => {
       if (!pcRef.current) return;
       const stats = await pcRef.current.getStats();
       stats.forEach((report) => {
         if (report.type === 'outbound-rtp' && report.kind === 'video') {
-          const asAny = report as RTCOutboundRtpStreamStats;
-          if (typeof asAny.framesPerSecond === 'number') {
-            setFps(Number(asAny.framesPerSecond.toFixed(1)));
+          const r = report as RTCOutboundRtpStreamStats;
+          if (typeof r.framesPerSecond === 'number') {
+            setFps(Number(r.framesPerSecond.toFixed(1)));
           }
         }
       });
@@ -102,23 +109,19 @@ export function useWebRtcRoom({ role, signalingUrl }: UseWebRtcRoomOptions) {
 
   const createPeerConnection = useCallback(
     (targetPeerId: string) => {
-      if (pcRef.current) {
-        return pcRef.current;
-      }
+      if (pcRef.current) return pcRef.current;
 
       const pc = new RTCPeerConnection(RTC_CONFIG);
       pcRef.current = pc;
 
-      pc.onicecandidate = (event) => {
-        if (event.candidate) {
-          sendSignal(targetPeerId, 'ice-candidate', event.candidate.toJSON());
-        }
+      pc.onicecandidate = (e) => {
+        if (e.candidate) sendSignal(targetPeerId, 'ice-candidate', e.candidate.toJSON());
       };
 
       pc.onconnectionstatechange = () => {
         if (pc.connectionState === 'connected') {
-          setStatus('streaming');
-          setIsStreaming(true);
+          setStatusBoth('streaming');
+          setIsStreamingBoth(true);
           if (role === 'sender') attachStats();
         }
       };
@@ -126,20 +129,20 @@ export function useWebRtcRoom({ role, signalingUrl }: UseWebRtcRoomOptions) {
       if (role === 'viewer') {
         const remote = new MediaStream();
         remoteStreamRef.current = remote;
-        pc.ontrack = (event) => {
-          event.streams[0].getTracks().forEach((track) => remote.addTrack(track));
+        pc.ontrack = (e) => {
+          e.streams[0].getTracks().forEach((t) => remote.addTrack(t));
         };
       }
 
       return pc;
     },
-    [attachStats, role, sendSignal]
+    [attachStats, role, sendSignal, setIsStreamingBoth, setStatusBoth]
   );
 
   const createAndSendOffer = useCallback(
     async (targetPeerId: string) => {
-      const pc = createPeerConnection(targetPeerId);
       if (role !== 'sender') return;
+      const pc = createPeerConnection(targetPeerId);
 
       if (!localStreamRef.current) {
         setError('Camera stream unavailable. Start stream first.');
@@ -147,30 +150,38 @@ export function useWebRtcRoom({ role, signalingUrl }: UseWebRtcRoomOptions) {
       }
 
       localStreamRef.current.getTracks().forEach((track) => {
-        if (!pc.getSenders().find((sender) => sender.track?.id === track.id)) {
+        if (!pc.getSenders().find((s) => s.track?.id === track.id)) {
           pc.addTrack(track, localStreamRef.current as MediaStream);
         }
       });
 
-      const offer = await pc.createOffer({
-        offerToReceiveAudio: false,
-        offerToReceiveVideo: true
-      });
+      const offer = await pc.createOffer({ offerToReceiveAudio: false, offerToReceiveVideo: true });
       await pc.setLocalDescription(offer);
-      console.log("📤 Sending OFFER to:", targetPeerId);
+      console.log('📤 Sending OFFER to:', targetPeerId);
       sendSignal(targetPeerId, 'offer', offer);
     },
     [createPeerConnection, role, sendSignal]
   );
 
   const joinRoom = useCallback(() => {
+    // ✅ Guard: never open a second socket
+    if (
+      wsRef.current &&
+      (wsRef.current.readyState === WebSocket.OPEN ||
+        wsRef.current.readyState === WebSocket.CONNECTING)
+    ) {
+      console.warn('joinRoom called while socket already open — ignored');
+      return;
+    }
+
     setError(null);
-    setStatus('connecting');
+    setStatusBoth('connecting');
+
     const ws = new WebSocket(signalingUrl);
     wsRef.current = ws;
 
     ws.onopen = () => {
-      console.log("✅ WS connected");
+      console.log('✅ WS connected');
       sendMessage({ type: 'join-room', roomId });
     };
 
@@ -179,14 +190,14 @@ export function useWebRtcRoom({ role, signalingUrl }: UseWebRtcRoomOptions) {
 
       if (message.type === 'joined-room') {
         setPeerId(message.peerId);
-        setStatus('joined');
+        setStatusBoth('joined');
         return;
       }
 
       if (message.type === 'room-peers') {
-        console.log("👥 Peers in room:", message.peers);
+        console.log('👥 Peers in room:', message.peers);
         const firstPeer = message.peers[0] ?? null;
-        setOtherPeerId(firstPeer);
+        setOtherPeerIdBoth(firstPeer);
 
         if (role === 'sender' && firstPeer) {
           const state = pcRef.current?.connectionState;
@@ -198,27 +209,30 @@ export function useWebRtcRoom({ role, signalingUrl }: UseWebRtcRoomOptions) {
       }
 
       if (message.type === 'peer-left') {
-        if (message.peerId === otherPeerId) {
+        // ✅ Read from ref, not stale closure
+        if (message.peerId === otherPeerIdRef.current) {
           closePeerConnection();
-          setOtherPeerId(null);
-          setIsStreaming(role === 'sender' ? isStreaming : false);
-          setStatus('joined');
+          setOtherPeerIdBoth(null);
+          // ✅ Read isStreaming from ref
+          setIsStreamingBoth(role === 'sender' ? isStreamingRef.current : false);
+          setStatusBoth('joined');
         }
         return;
       }
 
       if (message.type === 'signal') {
-        setOtherPeerId(message.fromPeerId);
+        setOtherPeerIdBoth(message.fromPeerId);
         const pc = createPeerConnection(message.fromPeerId);
 
         if (message.signalType === 'offer' && role === 'viewer') {
-          console.log("📥 OFFER received from:", message.fromPeerId);
-          await pc.setRemoteDescription(new RTCSessionDescription(message.data as RTCSessionDescriptionInit));
-          // 🔥 flush ICE queue
-for (const c of pendingIceCandidatesRef.current) {
-  await pc.addIceCandidate(new RTCIceCandidate(c));
-}
-pendingIceCandidatesRef.current = [];
+          console.log('📥 OFFER received from:', message.fromPeerId);
+          await pc.setRemoteDescription(
+            new RTCSessionDescription(message.data as RTCSessionDescriptionInit)
+          );
+          for (const c of pendingIceCandidatesRef.current) {
+            await pc.addIceCandidate(new RTCIceCandidate(c));
+          }
+          pendingIceCandidatesRef.current = [];
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
           sendSignal(message.fromPeerId, 'answer', answer);
@@ -226,66 +240,74 @@ pendingIceCandidatesRef.current = [];
         }
 
         if (message.signalType === 'answer' && role === 'sender') {
-          await pc.setRemoteDescription(new RTCSessionDescription(message.data as RTCSessionDescriptionInit));
-          // 🔥 flush ICE queue
-for (const c of pendingIceCandidatesRef.current) {
-  await pc.addIceCandidate(new RTCIceCandidate(c));
-}
-pendingIceCandidatesRef.current = [];
+          await pc.setRemoteDescription(
+            new RTCSessionDescription(message.data as RTCSessionDescriptionInit)
+          );
+          for (const c of pendingIceCandidatesRef.current) {
+            await pc.addIceCandidate(new RTCIceCandidate(c));
+          }
+          pendingIceCandidatesRef.current = [];
           return;
         }
 
         if (message.signalType === 'ice-candidate') {
-  const candidate = message.data as RTCIceCandidateInit;
-
-  if (pc.remoteDescription) {
-    await pc.addIceCandidate(new RTCIceCandidate(candidate));
-  } else {
-    pendingIceCandidatesRef.current.push(candidate);
-  }
-}
+          const candidate = message.data as RTCIceCandidateInit;
+          if (pc.remoteDescription) {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+          } else {
+            pendingIceCandidatesRef.current.push(candidate);
+          }
+        }
         return;
       }
 
       if (message.type === 'error') {
         setError(message.message);
-        setStatus('error');
+        setStatusBoth('error');
       }
     };
 
     ws.onerror = () => {
-      setStatus('error');
+      setStatusBoth('error');
       setError('Failed to connect to signaling server.');
     };
 
     ws.onclose = () => {
-      if (status !== 'stopped') {
-        setStatus('idle');
+      // ✅ Read from ref, not stale closure
+      if (statusRef.current !== 'stopped') {
+        setStatusBoth('idle');
       }
     };
-  }, [closePeerConnection, createAndSendOffer, createPeerConnection, isStreaming, otherPeerId, role, roomId, sendMessage, sendSignal, signalingUrl, status]);
+  // ✅ No volatile state deps (status, isStreaming, otherPeerId removed)
+  }, [
+    closePeerConnection,
+    createAndSendOffer,
+    createPeerConnection,
+    role,
+    roomId,
+    sendMessage,
+    sendSignal,
+    setIsStreamingBoth,
+    setOtherPeerIdBoth,
+    setStatusBoth,
+    signalingUrl,
+  ]);
 
   const disconnect = useCallback(() => {
     stopAll();
     wsRef.current?.close();
     wsRef.current = null;
     setPeerId(null);
-    setOtherPeerId(null);
-  }, [stopAll]);
+    setOtherPeerIdBoth(null);
+  }, [stopAll, setOtherPeerIdBoth]);
 
   const startStreaming = useCallback(async () => {
     if (role !== 'sender') return;
-
     try {
       setError(null);
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: false,
-        video: {
-          facingMode,
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          frameRate: { ideal: 30 }
-        }
+        video: { facingMode, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }
       });
       localStreamRef.current = stream;
       const [videoTrack] = stream.getVideoTracks();
@@ -293,34 +315,35 @@ pendingIceCandidatesRef.current = [];
       if (settings?.width && settings?.height) {
         setResolution(`${settings.width}x${settings.height}`);
       }
-      setIsStreaming(true);
+      setIsStreamingBoth(true);
 
-      if (otherPeerId) {
-        await createAndSendOffer(otherPeerId);
-        console.log("🎥 Stream started, sending offer to:", otherPeerId);
+      // ✅ Read from ref
+      if (otherPeerIdRef.current) {
+        await createAndSendOffer(otherPeerIdRef.current);
+        console.log('🎥 Stream started, sending offer to:', otherPeerIdRef.current);
       }
-    }  catch (err) {
-  console.error('getUserMedia error:', err);
-  setError(`Camera error: ${(err as Error).message}`);
-  setStatus('error');
-}
-  }, [createAndSendOffer, facingMode, otherPeerId, role]);
+    } catch (err) {
+      console.error('getUserMedia error:', err);
+      setError(`Camera error: ${(err as Error).message}`);
+      setStatusBoth('error');
+    }
+  }, [createAndSendOffer, facingMode, role, setIsStreamingBoth, setStatusBoth]);
 
   const stopStreaming = useCallback(() => {
     if (role !== 'sender') return;
     stopLocalTracks();
     closePeerConnection();
-    setIsStreaming(false);
-    setStatus('joined');
+    setIsStreamingBoth(false);
+    setStatusBoth('joined');
     setFps(null);
-  }, [closePeerConnection, role, stopLocalTracks]);
+  }, [closePeerConnection, role, setIsStreamingBoth, setStatusBoth, stopLocalTracks]);
 
   const toggleCamera = useCallback(async () => {
     if (role !== 'sender') return;
     const next = facingMode === 'environment' ? 'user' : 'environment';
     setFacingMode(next);
 
-    if (!isStreaming) return;
+    if (!isStreamingRef.current) return;  // ✅ ref instead of state
 
     stopLocalTracks();
     const stream = await navigator.mediaDevices.getUserMedia({
@@ -331,15 +354,13 @@ pendingIceCandidatesRef.current = [];
 
     const sender = pcRef.current?.getSenders().find((s) => s.track?.kind === 'video');
     const [track] = stream.getVideoTracks();
-    if (sender && track) {
-      await sender.replaceTrack(track);
-    }
+    if (sender && track) await sender.replaceTrack(track);
 
     const settings = track?.getSettings();
     if (settings?.width && settings?.height) {
       setResolution(`${settings.width}x${settings.height}`);
     }
-  }, [facingMode, isStreaming, role, stopLocalTracks]);
+  }, [facingMode, role, stopLocalTracks]);
 
   useEffect(() => () => disconnect(), [disconnect]);
 
@@ -347,22 +368,13 @@ pendingIceCandidatesRef.current = [];
   const localStream = useMemo(() => localStreamRef.current, [isStreaming, facingMode]);
 
   return {
-    roomId,
-    setRoomId,
-    peerId,
-    otherPeerId,
-    status,
-    error,
+    roomId, setRoomId,
+    peerId, otherPeerId,
+    status, error,
     facingMode,
-    joinRoom,
-    disconnect,
-    startStreaming,
-    stopStreaming,
-    toggleCamera,
-    localStream,
-    remoteStream,
-    isStreaming,
-    fps,
-    resolution
+    joinRoom, disconnect,
+    startStreaming, stopStreaming, toggleCamera,
+    localStream, remoteStream,
+    isStreaming, fps, resolution,
   };
 }
