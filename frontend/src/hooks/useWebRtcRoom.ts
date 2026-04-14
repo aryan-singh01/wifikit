@@ -65,17 +65,22 @@ export function useWebRtcRoom({ role, signalingUrl }: UseWebRtcRoomOptions) {
     [sendMessage]
   );
 
-  const closePeerConnection = useCallback(() => {
-    if (statsTimerRef.current) {
-      window.clearInterval(statsTimerRef.current);
-      statsTimerRef.current = null;
-    }
-    if (otherPeerIdRef.current) {
-      peerConnectionsRef.current.get(otherPeerIdRef.current)?.close();
-      peerConnectionsRef.current.delete(otherPeerIdRef.current);
-    }
-    pendingIceCandidatesRef.current = [];
-  }, []);
+const closePeerConnection = useCallback((peerId?: string) => {
+  if (statsTimerRef.current) {
+    window.clearInterval(statsTimerRef.current);
+    statsTimerRef.current = null;
+  }
+
+  if (peerId) {
+    peerConnectionsRef.current.get(peerId)?.close();
+    peerConnectionsRef.current.delete(peerId);
+  } else {
+    peerConnectionsRef.current.forEach((pc) => pc.close());
+    peerConnectionsRef.current.clear();
+  }
+
+  pendingIceCandidatesRef.current = [];
+}, []);
 
   const stopLocalTracks = useCallback(() => {
     localStreamRef.current?.getTracks().forEach((t) => t.stop());
@@ -123,6 +128,14 @@ if (existing) return existing;
       };
 
       pc.onconnectionstatechange = () => {
+        if (
+  pc.connectionState === 'failed' ||
+  pc.connectionState === 'closed' ||
+  pc.connectionState === 'disconnected'
+) {
+  pc.close();
+  peerConnectionsRef.current.delete(targetPeerId);
+}
         if (pc.connectionState === 'connected') {
           setStatusBoth('streaming');
           setIsStreamingBoth(true);
@@ -214,6 +227,9 @@ if (existing) return existing;
 
       if (message.type === 'peer-left') {
         // ✅ Read from ref, not stale closure
+        if (message.peerId) {
+  closePeerConnection(message.peerId);
+}
         if (message.peerId === otherPeerIdRef.current) {
           closePeerConnection();
           setOtherPeerIdBoth(null);
