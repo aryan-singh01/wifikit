@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # WiFiKit: LAN Real-Time Camera Streaming
 
 A full-stack LAN-only real-time camera streaming system using:
@@ -104,3 +105,6 @@ Frontend runs on:
 - Use HTTPS for camera access on mobile browsers when required.
 - Add auth / room secrets for controlled access.
 - Optionally split sender/viewer into dedicated routes (`/sender`, `/viewer`).
+=======
+# wifikit
+>>>>>>> 26f55a5a9ea743ead5fddd10fbc3c0cbfecf9764
