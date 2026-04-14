@@ -1,0 +1,97 @@
+:root {
+  font-family: Inter, system-ui, -apple-system, sans-serif;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+.hero {
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid #334155;
+}
+
+.hero .meta {
+  opacity: 0.8;
+  font-size: 0.875rem;
+}
+
+.split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 1rem;
+  padding: 1rem;
+}
+
+.grid {
+  display: grid;
+  gap: 1rem;
+  align-content: start;
+}
+
+.panel {
+  background: #111827;
+  padding: 1rem;
+  border-radius: 0.75rem;
+  border: 1px solid #334155;
+}
+
+.panel input {
+  width: 100%;
+  margin-top: 0.25rem;
+  margin-bottom: 0.75rem;
+  background: #1e293b;
+  border: 1px solid #475569;
+  color: #e2e8f0;
+  border-radius: 0.5rem;
+  padding: 0.5rem;
+}
+
+.button-row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+button {
+  border: none;
+  border-radius: 0.5rem;
+  background: #3b82f6;
+  color: white;
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+}
+
+button.secondary {
+  background: #475569;
+}
+
+.video-card {
+  background: #020617;
+  border-radius: 0.75rem;
+  border: 1px solid #334155;
+  padding: 1rem;
+}
+
+video {
+  width: 100%;
+  background: #020617;
+  border-radius: 0.5rem;
+  border: 1px solid #334155;
+  min-height: 180px;
+}
+
+video.mirror {
+  transform: scaleX(-1);
+}
+
+.error {
+  color: #f87171;
+}
