@@ -17,7 +17,7 @@ const senderOfferNeeded = (state: RTCPeerConnectionState) =>
 
 export function useWebRtcRoom({ role, signalingUrl }: UseWebRtcRoomOptions) {
   const wsRef = useRef<WebSocket | null>(null);
-  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const peerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
   const statsTimerRef = useRef<number | null>(null);
@@ -70,8 +70,10 @@ export function useWebRtcRoom({ role, signalingUrl }: UseWebRtcRoomOptions) {
       window.clearInterval(statsTimerRef.current);
       statsTimerRef.current = null;
     }
-    pcRef.current?.close();
-    pcRef.current = null;
+    if (otherPeerIdRef.current) {
+      peerConnectionsRef.current.get(otherPeerIdRef.current)?.close();
+      peerConnectionsRef.current.delete(otherPeerIdRef.current);
+    }
     pendingIceCandidatesRef.current = [];
   }, []);
 
@@ -90,12 +92,14 @@ export function useWebRtcRoom({ role, signalingUrl }: UseWebRtcRoomOptions) {
   }, [closePeerConnection, setIsStreamingBoth, setStatusBoth, stopLocalTracks]);
 
   const attachStats = useCallback(() => {
-    if (!pcRef.current || role !== 'sender') return;
+    if (!otherPeerIdRef.current || !peerConnectionsRef.current.get(otherPeerIdRef.current) || role !== 'sender') return;
     if (statsTimerRef.current) window.clearInterval(statsTimerRef.current);
 
     statsTimerRef.current = window.setInterval(async () => {
-      if (!pcRef.current) return;
-      const stats = await pcRef.current.getStats();
+      if (!otherPeerIdRef.current) return;
+      const pc = peerConnectionsRef.current.get(otherPeerIdRef.current);
+      if (!pc) return;
+      const stats = await pc.getStats();
       stats.forEach((report) => {
         if (report.type === 'outbound-rtp' && report.kind === 'video') {
           const r = report as RTCOutboundRtpStreamStats;
@@ -109,11 +113,11 @@ export function useWebRtcRoom({ role, signalingUrl }: UseWebRtcRoomOptions) {
 
   const createPeerConnection = useCallback(
     (targetPeerId: string) => {
-      if (pcRef.current) return pcRef.current;
+      const existing = peerConnectionsRef.current.get(targetPeerId);
+if (existing) return existing;
 
       const pc = new RTCPeerConnection(RTC_CONFIG);
-      pcRef.current = pc;
-
+      peerConnectionsRef.current.set(targetPeerId, pc);
       pc.onicecandidate = (e) => {
         if (e.candidate) sendSignal(targetPeerId, 'ice-candidate', e.candidate.toJSON());
       };
@@ -200,7 +204,7 @@ export function useWebRtcRoom({ role, signalingUrl }: UseWebRtcRoomOptions) {
         setOtherPeerIdBoth(firstPeer);
 
         if (role === 'sender' && firstPeer) {
-          const state = pcRef.current?.connectionState;
+          const state = peerConnectionsRef.current.get(firstPeer)?.connectionState;
           if (!state || senderOfferNeeded(state)) {
             await createAndSendOffer(firstPeer);
           }
@@ -352,7 +356,7 @@ export function useWebRtcRoom({ role, signalingUrl }: UseWebRtcRoomOptions) {
     });
     localStreamRef.current = stream;
 
-    const sender = pcRef.current?.getSenders().find((s) => s.track?.kind === 'video');
+    const sender = otherPeerIdRef.current ? peerConnectionsRef.current.get(otherPeerIdRef.current)?.getSenders().find((s) => s.track?.kind === 'video') : undefined;
     const [track] = stream.getVideoTracks();
     if (sender && track) await sender.replaceTrack(track);
 
