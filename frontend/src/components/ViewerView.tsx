@@ -45,6 +45,14 @@ export function ViewerView({ signalingUrl, onBack }: ViewerViewProps) {
           <button type="button" className="btn sec" onClick={rtc.disconnect}>
             Disconnect
           </button>
+
+          <button onClick={rtc.startRecording}>
+  Start Recording
+</button>
+
+<button onClick={rtc.stopRecording}>
+  Stop Recording
+</button>
         </div>
         <div className="readout">
           <div className="rrow">

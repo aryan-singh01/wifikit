@@ -72,7 +72,7 @@ button { cursor: pointer; }
 .video-placeholder::after { content: ''; position: absolute; inset: 0; background: repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(0, 0, 0, .06) 3px, rgba(0, 0, 0, .06) 4px); }
 .video-placeholder video { width: 100%; min-height: 100px; background: #020202; border: none; border-radius: 0; display: block; object-fit: cover; position: relative; z-index: 1; }
 .video-placeholder span, .video-placeholder svg { position: relative; z-index: 1; }
-.video-placeholder .mirror { transform: scaleX(-1); }
+.video-placeholder 
 .qr-wrap { display: flex; gap: 10px; align-items: flex-start; }
 .qr-box { background: #fff; border-radius: 5px; padding: 5px; flex-shrink: 0; width: 50px; height: 50px; display: grid; place-items: center; }
 .qr-placeholder { width: 38px; height: 38px; background: repeating-conic-gradient(#0a0a0a 0% 25%, #fff 0% 50%) 0 0 / 6px 6px; }

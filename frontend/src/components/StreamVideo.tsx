@@ -5,12 +5,12 @@ import { useEffect, useRef } from 'react';
 type StreamVideoProps = {
   stream: MediaStream | null;
   muted?: boolean;
-  mirrored?: boolean;
+  // mirrored?: boolean;
   label: string;
   live?: boolean;
 };
 
-export function StreamVideo({ stream, muted = false, mirrored = false, label, live = false }: StreamVideoProps) {
+export function StreamVideo({ stream, muted = false, label, live = false }: StreamVideoProps) {
   const ref = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
@@ -46,7 +46,7 @@ export function StreamVideo({ stream, muted = false, mirrored = false, label, li
       </div>
       <div className="video-placeholder">
         {hasStream ? (
-          <video ref={ref} autoPlay playsInline muted={muted} className={mirrored ? 'mirror' : ''} />
+          <video ref={ref} autoPlay playsInline muted={muted} />
         ) : (
           <>
             <svg width="28" height="28" viewBox="0 0 32 32" fill="none">

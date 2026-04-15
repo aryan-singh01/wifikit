@@ -25,6 +25,8 @@ export function useWebRtcRoom({ role, signalingUrl }: UseWebRtcRoomOptions) {
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
   const statsTimerRef = useRef<number | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
 
   // BUG FIX #5: Per-peer ICE candidate buffer.
   // Previously a single shared array — candidates got mixed up across
@@ -43,8 +45,8 @@ export function useWebRtcRoom({ role, signalingUrl }: UseWebRtcRoomOptions) {
   const [error, setError] = useState<string | null>(null);
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('environment');
   const [isStreaming, setIsStreaming] = useState(false);
-  const [fps, setFps] = useState<number | null>(null);
-  const [resolution, setResolution] = useState<string>('—');
+  const [resolution, setResolution] = useState('');
+  const [fps, setFps] = useState(0);
   // BUG FIX #6: Counter forces remoteStream useMemo to re-evaluate after
   // ontrack fires and adds tracks to the MediaStream.
   const [remoteTrackCount, setRemoteTrackCount] = useState(0);
@@ -102,7 +104,7 @@ export function useWebRtcRoom({ role, signalingUrl }: UseWebRtcRoomOptions) {
     remoteStreamRef.current = null;
     setIsStreamingBoth(false);
     setStatusBoth('stopped');
-    setFps(null);
+    setFps(0);
   }, [closePeerConnection, setIsStreamingBoth, setStatusBoth, stopLocalTracks]);
 
   const attachStats = useCallback(() => {
@@ -123,6 +125,40 @@ export function useWebRtcRoom({ role, signalingUrl }: UseWebRtcRoomOptions) {
       });
     }, 1000);
   }, [role]);
+
+  const startRecording = () => {
+  const stream = role === 'sender' ? localStreamRef.current : remoteStreamRef.current;
+  if (!stream) return;
+
+  const recorder = new MediaRecorder(stream, {
+    mimeType: 'video/webm;codecs=vp8',
+  });
+
+  chunksRef.current = [];
+
+  recorder.ondataavailable = (e) => {
+    if (e.data.size > 0) chunksRef.current.push(e.data);
+  };
+
+  recorder.onstop = () => {
+    const blob = new Blob(chunksRef.current, { type: recorder.mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `stream-${Date.now()}.webm`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  recorder.start();
+  recorderRef.current = recorder;
+};
+
+const stopRecording = () => {
+  if (recorderRef.current && recorderRef.current.state !== 'inactive') {
+    recorderRef.current.stop();
+  }
+};
 
   const createPeerConnection = useCallback(
     (targetPeerId: string) => {
@@ -375,33 +411,48 @@ export function useWebRtcRoom({ role, signalingUrl }: UseWebRtcRoomOptions) {
     closePeerConnection();
     setIsStreamingBoth(false);
     setStatusBoth('joined');
-    setFps(null);
+    setFps(0);
   }, [closePeerConnection, role, setIsStreamingBoth, setStatusBoth, stopLocalTracks]);
 
   const toggleCamera = useCallback(async () => {
-    if (role !== 'sender') return;
-    const next = facingMode === 'environment' ? 'user' : 'environment';
-    setFacingMode(next);
-    if (!isStreamingRef.current) return;
-    stopLocalTracks();
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: { facingMode: next }
-    });
-    localStreamRef.current = stream;
-    const sender = otherPeerIdRef.current
-      ? peerConnectionsRef.current
-          .get(otherPeerIdRef.current)
-          ?.getSenders()
-          .find((s) => s.track?.kind === 'video')
-      : undefined;
-    const [track] = stream.getVideoTracks();
-    if (sender && track) await sender.replaceTrack(track);
-    const settings = track?.getSettings();
-    if (settings?.width && settings?.height) {
-      setResolution(`${settings.width}x${settings.height}`);
-    }
-  }, [facingMode, role, stopLocalTracks]);
+  if (role !== 'sender') return;
+
+  const next = facingMode === 'environment' ? 'user' : 'environment';
+  setFacingMode(next);
+
+  if (!isStreamingRef.current) return;
+
+  const oldStream = localStreamRef.current;
+  const newStream = await navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: {
+      facingMode: { ideal: next },
+      width: { ideal: 1280 },
+      height: { ideal: 720 },
+      frameRate: { ideal: 30, max: 60 },
+    },
+  });
+
+  const [newTrack] = newStream.getVideoTracks();
+  const sender = otherPeerIdRef.current
+    ? peerConnectionsRef.current
+        .get(otherPeerIdRef.current)
+        ?.getSenders()
+        .find((s) => s.track?.kind === 'video')
+    : undefined;
+
+  if (sender && newTrack) {
+    await sender.replaceTrack(newTrack);
+  }
+
+  localStreamRef.current = newStream;
+  oldStream?.getTracks().forEach((t) => t.stop());
+
+  const settings = newTrack?.getSettings();
+  if (settings?.width && settings?.height) {
+    setResolution(`${settings.width}x${settings.height}`);
+  }
+}, [facingMode, role]);
 
   useEffect(() => () => disconnect(), [disconnect]);
 
@@ -423,5 +474,6 @@ export function useWebRtcRoom({ role, signalingUrl }: UseWebRtcRoomOptions) {
     startStreaming, stopStreaming, toggleCamera,
     localStream, remoteStream,
     isStreaming, fps, resolution,
+    startRecording, stopRecording,
   };
 }
