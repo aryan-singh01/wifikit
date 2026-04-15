@@ -12,8 +12,12 @@ type Role = 'sender' | 'viewer';
 type UseWebRtcRoomOptions = { role: Role; signalingUrl: string };
 type ConnectionStatus = 'idle' | 'connecting' | 'joined' | 'streaming' | 'error' | 'stopped';
 
+// BUG FIX #2: Only offer for brand-new connections.
+// Previously included 'connecting' and 'disconnected' — when room-peers fired
+// multiple times (server broadcasts on every join), this created duplicate
+// offers on the same PC → "m-line order mismatch" SDP error → connection dead.
 const senderOfferNeeded = (state: RTCPeerConnectionState) =>
-  state === 'new' || state === 'connecting' || state === 'disconnected';
+  state === 'new';
 
 export function useWebRtcRoom({ role, signalingUrl }: UseWebRtcRoomOptions) {
   const wsRef = useRef<WebSocket | null>(null);
@@ -21,9 +25,13 @@ export function useWebRtcRoom({ role, signalingUrl }: UseWebRtcRoomOptions) {
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
   const statsTimerRef = useRef<number | null>(null);
-  const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
 
-  // ─── Refs that shadow state so async callbacks always read current values ───
+  // BUG FIX #5: Per-peer ICE candidate buffer.
+  // Previously a single shared array — candidates got mixed up across
+  // connections during reconnects.
+  const pendingIceCandidatesRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
+
+  // Refs shadow state so async callbacks always read current values
   const otherPeerIdRef = useRef<string | null>(null);
   const isStreamingRef = useRef(false);
   const statusRef = useRef<ConnectionStatus>('idle');
@@ -37,8 +45,10 @@ export function useWebRtcRoom({ role, signalingUrl }: UseWebRtcRoomOptions) {
   const [isStreaming, setIsStreaming] = useState(false);
   const [fps, setFps] = useState<number | null>(null);
   const [resolution, setResolution] = useState<string>('—');
+  // BUG FIX #6: Counter forces remoteStream useMemo to re-evaluate after
+  // ontrack fires and adds tracks to the MediaStream.
+  const [remoteTrackCount, setRemoteTrackCount] = useState(0);
 
-  // Keep refs in sync with state
   const setOtherPeerIdBoth = useCallback((id: string | null) => {
     otherPeerIdRef.current = id;
     setOtherPeerId(id);
@@ -65,22 +75,21 @@ export function useWebRtcRoom({ role, signalingUrl }: UseWebRtcRoomOptions) {
     [sendMessage]
   );
 
-const closePeerConnection = useCallback((peerId?: string) => {
-  if (statsTimerRef.current) {
-    window.clearInterval(statsTimerRef.current);
-    statsTimerRef.current = null;
-  }
-
-  if (peerId) {
-    peerConnectionsRef.current.get(peerId)?.close();
-    peerConnectionsRef.current.delete(peerId);
-  } else {
-    peerConnectionsRef.current.forEach((pc) => pc.close());
-    peerConnectionsRef.current.clear();
-  }
-
-  pendingIceCandidatesRef.current = [];
-}, []);
+  const closePeerConnection = useCallback((peerId?: string) => {
+    if (statsTimerRef.current) {
+      window.clearInterval(statsTimerRef.current);
+      statsTimerRef.current = null;
+    }
+    if (peerId) {
+      peerConnectionsRef.current.get(peerId)?.close();
+      peerConnectionsRef.current.delete(peerId);
+      pendingIceCandidatesRef.current.delete(peerId);
+    } else {
+      peerConnectionsRef.current.forEach((pc) => pc.close());
+      peerConnectionsRef.current.clear();
+      pendingIceCandidatesRef.current.clear();
+    }
+  }, []);
 
   const stopLocalTracks = useCallback(() => {
     localStreamRef.current?.getTracks().forEach((t) => t.stop());
@@ -99,7 +108,6 @@ const closePeerConnection = useCallback((peerId?: string) => {
   const attachStats = useCallback(() => {
     if (!otherPeerIdRef.current || !peerConnectionsRef.current.get(otherPeerIdRef.current) || role !== 'sender') return;
     if (statsTimerRef.current) window.clearInterval(statsTimerRef.current);
-
     statsTimerRef.current = window.setInterval(async () => {
       if (!otherPeerIdRef.current) return;
       const pc = peerConnectionsRef.current.get(otherPeerIdRef.current);
@@ -119,24 +127,23 @@ const closePeerConnection = useCallback((peerId?: string) => {
   const createPeerConnection = useCallback(
     (targetPeerId: string) => {
       const existing = peerConnectionsRef.current.get(targetPeerId);
-if (existing) return existing;
+      if (existing) return existing;
 
       const pc = new RTCPeerConnection(RTC_CONFIG);
       peerConnectionsRef.current.set(targetPeerId, pc);
+
       pc.onicecandidate = (e) => {
         if (e.candidate) sendSignal(targetPeerId, 'ice-candidate', e.candidate.toJSON());
       };
 
       pc.onconnectionstatechange = () => {
-        if (
-  pc.connectionState === 'failed' ||
-  pc.connectionState === 'closed' ||
-  pc.connectionState === 'disconnected'
-) {
-  pc.close();
-  peerConnectionsRef.current.delete(targetPeerId);
-}
-        if (pc.connectionState === 'connected') {
+        const state = pc.connectionState;
+        // 'disconnected' is transient — don't destroy on it, ICE may recover.
+        if (state === 'failed' || state === 'closed') {
+          pc.close();
+          peerConnectionsRef.current.delete(targetPeerId);
+        }
+        if (state === 'connected') {
           setStatusBoth('streaming');
           setIsStreamingBoth(true);
           if (role === 'sender') attachStats();
@@ -146,8 +153,16 @@ if (existing) return existing;
       if (role === 'viewer') {
         const remote = new MediaStream();
         remoteStreamRef.current = remote;
+
+        // BUG FIX #4: Use e.track directly instead of e.streams[0].getTracks().
+        // e.streams[0] can be undefined in certain signaling edge cases, causing
+        // a silent TypeError so tracks never get added to the stream.
         pc.ontrack = (e) => {
-          e.streams[0].getTracks().forEach((t) => remote.addTrack(t));
+          const track = e.track;
+          if (!remote.getTracks().find((t) => t.id === track.id)) {
+            remote.addTrack(track);
+            setRemoteTrackCount((n) => n + 1);
+          }
         };
       }
 
@@ -162,7 +177,10 @@ if (existing) return existing;
       const pc = createPeerConnection(targetPeerId);
 
       if (!localStreamRef.current) {
-        setError('Camera stream unavailable. Start stream first.');
+        // BUG FIX #3: Don't set an error here. This path is hit when room-peers
+        // arrives before the user clicks "Start Stream". Just log and bail —
+        // startStreaming() will call createAndSendOffer again once ready.
+        console.log('ℹ️ Offer deferred — stream not started yet');
         return;
       }
 
@@ -172,7 +190,7 @@ if (existing) return existing;
         }
       });
 
-      const offer = await pc.createOffer({ offerToReceiveAudio: false, offerToReceiveVideo: true });
+      const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       console.log('📤 Sending OFFER to:', targetPeerId);
       sendSignal(targetPeerId, 'offer', offer);
@@ -181,7 +199,6 @@ if (existing) return existing;
   );
 
   const joinRoom = useCallback(() => {
-    // ✅ Guard: never open a second socket
     if (
       wsRef.current &&
       (wsRef.current.readyState === WebSocket.OPEN ||
@@ -216,7 +233,12 @@ if (existing) return existing;
         const firstPeer = message.peers[0] ?? null;
         setOtherPeerIdBoth(firstPeer);
 
-        if (role === 'sender' && firstPeer) {
+        // BUG FIX #2 + #3: Only create an offer when ALL of these are true:
+        //   1. We're the sender
+        //   2. There's a peer to send to
+        //   3. We're already streaming (stream is ready — avoids the misleading error)
+        //   4. No active/establishing connection yet for this peer
+        if (role === 'sender' && firstPeer && isStreamingRef.current) {
           const state = peerConnectionsRef.current.get(firstPeer)?.connectionState;
           if (!state || senderOfferNeeded(state)) {
             await createAndSendOffer(firstPeer);
@@ -226,14 +248,11 @@ if (existing) return existing;
       }
 
       if (message.type === 'peer-left') {
-        // ✅ Read from ref, not stale closure
         if (message.peerId) {
-  closePeerConnection(message.peerId);
-}
+          closePeerConnection(message.peerId);
+        }
         if (message.peerId === otherPeerIdRef.current) {
-          closePeerConnection();
           setOtherPeerIdBoth(null);
-          // ✅ Read isStreaming from ref
           setIsStreamingBoth(role === 'sender' ? isStreamingRef.current : false);
           setStatusBoth('joined');
         }
@@ -249,10 +268,11 @@ if (existing) return existing;
           await pc.setRemoteDescription(
             new RTCSessionDescription(message.data as RTCSessionDescriptionInit)
           );
-          for (const c of pendingIceCandidatesRef.current) {
+          const pending = pendingIceCandidatesRef.current.get(message.fromPeerId) ?? [];
+          for (const c of pending) {
             await pc.addIceCandidate(new RTCIceCandidate(c));
           }
-          pendingIceCandidatesRef.current = [];
+          pendingIceCandidatesRef.current.delete(message.fromPeerId);
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
           sendSignal(message.fromPeerId, 'answer', answer);
@@ -263,10 +283,11 @@ if (existing) return existing;
           await pc.setRemoteDescription(
             new RTCSessionDescription(message.data as RTCSessionDescriptionInit)
           );
-          for (const c of pendingIceCandidatesRef.current) {
+          const pending = pendingIceCandidatesRef.current.get(message.fromPeerId) ?? [];
+          for (const c of pending) {
             await pc.addIceCandidate(new RTCIceCandidate(c));
           }
-          pendingIceCandidatesRef.current = [];
+          pendingIceCandidatesRef.current.delete(message.fromPeerId);
           return;
         }
 
@@ -275,7 +296,9 @@ if (existing) return existing;
           if (pc.remoteDescription) {
             await pc.addIceCandidate(new RTCIceCandidate(candidate));
           } else {
-            pendingIceCandidatesRef.current.push(candidate);
+            const buf = pendingIceCandidatesRef.current.get(message.fromPeerId) ?? [];
+            buf.push(candidate);
+            pendingIceCandidatesRef.current.set(message.fromPeerId, buf);
           }
         }
         return;
@@ -293,12 +316,10 @@ if (existing) return existing;
     };
 
     ws.onclose = () => {
-      // ✅ Read from ref, not stale closure
       if (statusRef.current !== 'stopped') {
         setStatusBoth('idle');
       }
     };
-  // ✅ No volatile state deps (status, isStreaming, otherPeerId removed)
   }, [
     closePeerConnection,
     createAndSendOffer,
@@ -337,7 +358,6 @@ if (existing) return existing;
       }
       setIsStreamingBoth(true);
 
-      // ✅ Read from ref
       if (otherPeerIdRef.current) {
         await createAndSendOffer(otherPeerIdRef.current);
         console.log('🎥 Stream started, sending offer to:', otherPeerIdRef.current);
@@ -362,20 +382,21 @@ if (existing) return existing;
     if (role !== 'sender') return;
     const next = facingMode === 'environment' ? 'user' : 'environment';
     setFacingMode(next);
-
-    if (!isStreamingRef.current) return;  // ✅ ref instead of state
-
+    if (!isStreamingRef.current) return;
     stopLocalTracks();
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
       video: { facingMode: next }
     });
     localStreamRef.current = stream;
-
-    const sender = otherPeerIdRef.current ? peerConnectionsRef.current.get(otherPeerIdRef.current)?.getSenders().find((s) => s.track?.kind === 'video') : undefined;
+    const sender = otherPeerIdRef.current
+      ? peerConnectionsRef.current
+          .get(otherPeerIdRef.current)
+          ?.getSenders()
+          .find((s) => s.track?.kind === 'video')
+      : undefined;
     const [track] = stream.getVideoTracks();
     if (sender && track) await sender.replaceTrack(track);
-
     const settings = track?.getSettings();
     if (settings?.width && settings?.height) {
       setResolution(`${settings.width}x${settings.height}`);
@@ -384,7 +405,13 @@ if (existing) return existing;
 
   useEffect(() => () => disconnect(), [disconnect]);
 
-  const remoteStream = useMemo(() => remoteStreamRef.current, [status, otherPeerId]);
+  // remoteTrackCount is in deps so this re-evaluates when ontrack fires,
+  // ensuring StreamVideo receives the stream after tracks are attached.
+  const remoteStream = useMemo(
+    () => remoteStreamRef.current,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [status, otherPeerId, remoteTrackCount]
+  );
   const localStream = useMemo(() => localStreamRef.current, [isStreaming, facingMode]);
 
   return {
