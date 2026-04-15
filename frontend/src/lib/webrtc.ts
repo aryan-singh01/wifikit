@@ -1,7 +1,5 @@
 export const RTC_CONFIG: RTCConfiguration = {
   iceServers: [
-    // STUN servers are required even on LAN — many routers block
-    // direct peer-to-peer without them (AP isolation, etc.)
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
   ],

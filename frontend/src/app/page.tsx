@@ -1,86 +1,123 @@
 'use client';
 
-import { Suspense } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useEffect, useMemo, useState } from 'react';
 import { SenderView } from '@/components/SenderView';
 import { ViewerView } from '@/components/ViewerView';
 
-const signalingUrl =
-  process.env.NEXT_PUBLIC_SIGNALING_URL ?? '';
+type TabId = 'landing' | 'sender' | 'viewer';
 
-function PageContent() {
-  const searchParams = useSearchParams();
-  const role = searchParams.get('role');
-
-  if (role === 'sender') {
-    return <SenderView signalingUrl={signalingUrl} />;
-  }
-
-  if (role === 'viewer') {
-    return <ViewerView signalingUrl={signalingUrl} />;
-  }
-
-  return (
-    <div style={{
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: '1rem',
-      padding: '3rem 1rem',
-    }}>
-      <h2 style={{ margin: 0 }}>Select your role</h2>
-      <p style={{ opacity: 0.6, margin: 0, textAlign: 'center' }}>
-        Open this page on each device and pick the correct role.
-      </p>
-      <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', justifyContent: 'center' }}>
-        <a
-          href="?role=sender"
-          style={{
-            padding: '1rem 2rem',
-            background: '#1e40af',
-            color: '#fff',
-            borderRadius: '0.75rem',
-            textDecoration: 'none',
-            fontWeight: 600,
-            fontSize: '1.1rem',
-          }}
-        >
-          📱 Sender (phone / camera)
-        </a>
-        <a
-          href="?role=viewer"
-          style={{
-            padding: '1rem 2rem',
-            background: '#065f46',
-            color: '#fff',
-            borderRadius: '0.75rem',
-            textDecoration: 'none',
-            fontWeight: 600,
-            fontSize: '1.1rem',
-          }}
-        >
-          🖥️ Viewer (laptop / desktop)
-        </a>
-      </div>
-    </div>
-  );
-}
+const signalingUrl = process.env.NEXT_PUBLIC_SIGNALING_URL ?? 'wss://signal.railway.app';
 
 export default function HomePage() {
+  const [activeTab, setActiveTab] = useState<TabId>('landing');
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const role = params.get('role');
+    if (role === 'sender' || role === 'viewer') {
+      setActiveTab(role);
+    }
+  }, []);
+
+  const tabs = useMemo(
+    () => [
+      { id: 'landing' as const, label: 'Home' },
+      { id: 'sender' as const, label: 'Sender' },
+      { id: 'viewer' as const, label: 'Viewer' },
+    ],
+    []
+  );
+
   return (
-    <div>
-      <header className="hero">
-        <h1>WiFi Camera Streaming Kit</h1>
-        <p className="meta">Signaling server: {signalingUrl}</p>
-      </header>
-      {/*
-        Suspense is required because useSearchParams() needs it in Next.js App Router.
-        Without it the build will throw a missing-Suspense-boundary error.
-      */}
-      <Suspense fallback={<p style={{ padding: '2rem', opacity: 0.5 }}>Loading…</p>}>
-        <PageContent />
-      </Suspense>
+    <div className="wk">
+      <div className="wk-tabs">
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            className={`wk-tab ${activeTab === tab.id ? 'active' : ''}`}
+            onClick={() => setActiveTab(tab.id)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === 'landing' ? (
+        <div className="wk-view active" id="tab-landing">
+          <div className="topbar">
+            <div className="brand">
+              <div className="brand-icon">W</div>
+              WifiKit
+            </div>
+            <span className="topbar-url">{signalingUrl || 'wss://signal.railway.app'}</span>
+          </div>
+
+          <div className="landing">
+            <div style={{ textAlign: 'center' }}>
+              <div className="eyebrow" style={{ marginBottom: 8 }}>
+                WebRTC · LAN · Real-time
+              </div>
+              <div className="landing-title">
+                Wifi<span>Kit</span>
+              </div>
+              <div className="landing-sub" style={{ marginTop: 10 }}>
+                Stream your phone camera to any device on the same network. Low-latency,
+                peer-to-peer, no cloud.
+              </div>
+            </div>
+
+            <div className="role-cards">
+              <button className="role-card sender" type="button" onClick={() => setActiveTab('sender')}>
+                <div className="role-icon">📱</div>
+                <div className="role-name">Sender</div>
+                <div className="role-desc">
+                  Phone or camera device.
+                  <br />
+                  Captures and broadcasts video.
+                </div>
+                <span className="role-arrow">Open →</span>
+              </button>
+              <button className="role-card viewer" type="button" onClick={() => setActiveTab('viewer')}>
+                <div className="role-icon">🖥️</div>
+                <div className="role-name">Viewer</div>
+                <div className="role-desc">
+                  Laptop or desktop monitor.
+                  <br />
+                  Receives the live stream.
+                </div>
+                <span className="role-arrow">Open →</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {activeTab === 'sender' ? (
+        <div className="wk-view active" id="tab-sender">
+          <div className="topbar">
+            <div className="brand">
+              <div className="brand-icon">W</div>
+              WifiKit
+            </div>
+            <span className="topbar-url">{signalingUrl || 'wss://signal.railway.app'}</span>
+          </div>
+          <SenderView signalingUrl={signalingUrl} onBack={() => setActiveTab('landing')} />
+        </div>
+      ) : null}
+
+      {activeTab === 'viewer' ? (
+        <div className="wk-view active" id="tab-viewer">
+          <div className="topbar">
+            <div className="brand">
+              <div className="brand-icon">W</div>
+              WifiKit
+            </div>
+            <span className="topbar-url">{signalingUrl || 'wss://signal.railway.app'}</span>
+          </div>
+          <ViewerView signalingUrl={signalingUrl} onBack={() => setActiveTab('landing')} />
+        </div>
+      ) : null}
     </div>
   );
 }

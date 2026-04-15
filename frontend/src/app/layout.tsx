@@ -2,12 +2,12 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'WiFi Camera Stream',
-  description: 'LAN-only WebRTC real-time camera streaming'
+  title: 'WifiKit',
+  description: 'WebRTC LAN streaming kit'
 };
 
 export default function RootLayout({
-  children
+  children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
