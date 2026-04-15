@@ -20,7 +20,6 @@ function PageContent() {
     return <ViewerView signalingUrl={signalingUrl} />;
   }
 
-  // No role selected — show a picker so each device chooses one role only
   return (
     <div style={{
       display: 'flex',
