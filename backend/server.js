@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { WebSocketServer, WebSocket } from 'ws';
 
-const PORT = Number(process.env.PORT || 8080);
+const PORT = Number(process.env.PORT || 8081);
 const HEARTBEAT_INTERVAL_MS = 20_000; // ping every 20 s
 const HEARTBEAT_TIMEOUT_MS  = 10_000; // kill if no pong within 10 s
 

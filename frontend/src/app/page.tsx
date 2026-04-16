@@ -6,7 +6,9 @@ import { ViewerView } from '@/components/ViewerView';
 
 type TabId = 'landing' | 'sender' | 'viewer';
 
-const signalingUrl = process.env.NEXT_PUBLIC_SIGNALING_URL ?? 'wss://signal.railway.app';
+const signalingUrl =
+  process.env.NEXT_PUBLIC_SIGNALING_URL ??
+  'ws://10.50.63.17:8081';
 
 export default function HomePage() {
   const [activeTab, setActiveTab] = useState<TabId>('landing');
