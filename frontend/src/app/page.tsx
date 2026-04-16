@@ -50,7 +50,7 @@ export default function HomePage() {
               <div className="brand-icon">W</div>
               WifiKit
             </div>
-            <span className="topbar-url">{signalingUrl || 'wss://signal.railway.app'}</span>
+            {/* <span className="topbar-url">{signalingUrl || 'wss://signal.railway.app'}</span> */}
           </div>
 
           <div className="landing">
@@ -100,7 +100,7 @@ export default function HomePage() {
               <div className="brand-icon">W</div>
               WifiKit
             </div>
-            <span className="topbar-url">{signalingUrl || 'wss://signal.railway.app'}</span>
+            {/* <span className="topbar-url">{signalingUrl || 'wss://signal.railway.app'}</span> */}
           </div>
           <SenderView signalingUrl={signalingUrl} onBack={() => setActiveTab('landing')} />
         </div>
@@ -113,7 +113,7 @@ export default function HomePage() {
               <div className="brand-icon">W</div>
               WifiKit
             </div>
-            <span className="topbar-url">{signalingUrl || 'wss://signal.railway.app'}</span>
+            {/* <span className="topbar-url">{signalingUrl || 'wss://signal.railway.app'}</span> */}
           </div>
           <ViewerView signalingUrl={signalingUrl} onBack={() => setActiveTab('landing')} />
         </div>
