@@ -27,6 +27,7 @@ export function useWebRtcRoom({ role, signalingUrl }: UseWebRtcRoomOptions) {
   const statsTimerRef = useRef<number | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const recorderTimerRef = useRef<number | null>(null);
 
   // BUG FIX #5: Per-peer ICE candidate buffer.
   // Previously a single shared array — candidates got mixed up across
@@ -47,6 +48,10 @@ export function useWebRtcRoom({ role, signalingUrl }: UseWebRtcRoomOptions) {
   const [isStreaming, setIsStreaming] = useState(false);
   const [resolution, setResolution] = useState('');
   const [fps, setFps] = useState(0);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
+  // Counter that forces localStream useMemo to re-evaluate (e.g. after stop-recording).
+  const [localStreamVersion, setLocalStreamVersion] = useState(0);
   // BUG FIX #6: Counter forces remoteStream useMemo to re-evaluate after
   // ontrack fires and adds tracks to the MediaStream.
   const [remoteTrackCount, setRemoteTrackCount] = useState(0);
@@ -126,39 +131,62 @@ export function useWebRtcRoom({ role, signalingUrl }: UseWebRtcRoomOptions) {
     }, 1000);
   }, [role]);
 
-  const startRecording = () => {
-  const stream = role === 'sender' ? localStreamRef.current : remoteStreamRef.current;
-  if (!stream) return;
+  const startRecording = useCallback(() => {
+    const stream = role === 'sender' ? localStreamRef.current : remoteStreamRef.current;
+    if (!stream) return;
+    if (recorderRef.current && recorderRef.current.state !== 'inactive') return;
 
-  const recorder = new MediaRecorder(stream, {
-    mimeType: 'video/webm;codecs=vp8',
-  });
+    // Pick the best supported mimeType
+    const mimeType = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']
+      .find((m) => MediaRecorder.isTypeSupported(m)) ?? '';
 
-  chunksRef.current = [];
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    chunksRef.current = [];
 
-  recorder.ondataavailable = (e) => {
-    if (e.data.size > 0) chunksRef.current.push(e.data);
-  };
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) chunksRef.current.push(e.data);
+    };
 
-  recorder.onstop = () => {
-    const blob = new Blob(chunksRef.current, { type: recorder.mimeType });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `stream-${Date.now()}.webm`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+    recorder.onstop = () => {
+      // Clear timer
+      if (recorderTimerRef.current) {
+        window.clearInterval(recorderTimerRef.current);
+        recorderTimerRef.current = null;
+      }
+      setIsRecording(false);
+      setRecordingTime(0);
 
-  recorder.start();
-  recorderRef.current = recorder;
-};
+      // Download the recorded blob
+      const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'video/webm' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `recording-${Date.now()}.webm`;
+      a.click();
+      URL.revokeObjectURL(url);
 
-const stopRecording = () => {
-  if (recorderRef.current && recorderRef.current.state !== 'inactive') {
-    recorderRef.current.stop();
-  }
-};
+      // FIX: After MediaRecorder stops, some mobile browsers pause the <video>
+      // element. Bumping localStreamVersion forces localStream useMemo to
+      // re-evaluate so StreamVideo re-attaches and calls video.play() again.
+      setLocalStreamVersion((v) => v + 1);
+    };
+
+    recorder.start(1000); // collect a chunk every second
+    recorderRef.current = recorder;
+    setIsRecording(true);
+    setRecordingTime(0);
+
+    // Tick the recording timer every second
+    recorderTimerRef.current = window.setInterval(() => {
+      setRecordingTime((t) => t + 1);
+    }, 1000);
+  }, [role]);
+
+  const stopRecording = useCallback(() => {
+    if (recorderRef.current && recorderRef.current.state !== 'inactive') {
+      recorderRef.current.stop();
+    }
+  }, []);
 
   const createPeerConnection = useCallback(
     (targetPeerId: string) => {
@@ -418,41 +446,56 @@ const stopRecording = () => {
   if (role !== 'sender') return;
 
   const next = facingMode === 'environment' ? 'user' : 'environment';
-  setFacingMode(next);
 
-  if (!isStreamingRef.current) return;
-
-  const oldStream = localStreamRef.current;
-  const newStream = await navigator.mediaDevices.getUserMedia({
-    audio: false,
-    video: {
-      facingMode: { ideal: next },
-      width: { ideal: 1280 },
-      height: { ideal: 720 },
-      frameRate: { ideal: 30, max: 60 },
-    },
-  });
-
-  const [newTrack] = newStream.getVideoTracks();
-  const sender = otherPeerIdRef.current
-    ? peerConnectionsRef.current
-        .get(otherPeerIdRef.current)
-        ?.getSenders()
-        .find((s) => s.track?.kind === 'video')
-    : undefined;
-
-  if (sender && newTrack) {
-    await sender.replaceTrack(newTrack);
+  // If not currently streaming, just flip the mode so the next getUserMedia picks it up.
+  if (!isStreamingRef.current) {
+    setFacingMode(next);
+    return;
   }
 
-  localStreamRef.current = newStream;
-  oldStream?.getTracks().forEach((t) => t.stop());
+  try {
+    const oldStream = localStreamRef.current;
+    const newStream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        facingMode: { ideal: next },
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+        frameRate: { ideal: 30, max: 60 },
+      },
+    });
 
-  const settings = newTrack?.getSettings();
-  if (settings?.width && settings?.height) {
-    setResolution(`${settings.width}x${settings.height}`);
+    const [newTrack] = newStream.getVideoTracks();
+    const sender = otherPeerIdRef.current
+      ? peerConnectionsRef.current
+          .get(otherPeerIdRef.current)
+          ?.getSenders()
+          .find((s) => s.track?.kind === 'video')
+      : undefined;
+
+    if (sender && newTrack) {
+      await sender.replaceTrack(newTrack);
+    }
+
+    // Update ref BEFORE stopping old tracks and BEFORE setFacingMode.
+    // setFacingMode triggers a re-render which re-evaluates localStream useMemo —
+    // at that point localStreamRef.current must already hold the new stream,
+    // otherwise the video element receives the stopped (blank) old stream.
+    localStreamRef.current = newStream;
+    oldStream?.getTracks().forEach((t) => t.stop());
+
+    const settings = newTrack?.getSettings();
+    if (settings?.width && settings?.height) {
+      setResolution(`${settings.width}x${settings.height}`);
+    }
+
+    // Trigger re-render now that the ref holds the new stream.
+    setFacingMode(next);
+  } catch (err) {
+    console.error('toggleCamera error:', err);
+    setError(`Camera switch error: ${(err as Error).message}`);
   }
-}, [facingMode, role]);
+}, [facingMode, role, setError]);
 
   useEffect(() => () => disconnect(), [disconnect]);
 
@@ -463,7 +506,7 @@ const stopRecording = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [status, otherPeerId, remoteTrackCount]
   );
-  const localStream = useMemo(() => localStreamRef.current, [isStreaming, facingMode]);
+  const localStream = useMemo(() => localStreamRef.current, [isStreaming, facingMode, localStreamVersion]);
 
   return {
     roomId, setRoomId,
@@ -474,6 +517,7 @@ const stopRecording = () => {
     startStreaming, stopStreaming, toggleCamera,
     localStream, remoteStream,
     isStreaming, fps, resolution,
+    isRecording, recordingTime,
     startRecording, stopRecording,
   };
 }

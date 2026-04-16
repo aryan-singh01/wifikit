@@ -1,4 +1,3 @@
-
 'use client';
 
 import { useWebRtcRoom } from '@/hooks/useWebRtcRoom';
@@ -8,6 +7,12 @@ type SenderViewProps = {
   signalingUrl: string;
   onBack?: () => void;
 };
+
+function formatTime(seconds: number) {
+  const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+  const s = (seconds % 60).toString().padStart(2, '0');
+  return `${m}:${s}`;
+}
 
 export function SenderView({ signalingUrl, onBack }: SenderViewProps) {
   const rtc = useWebRtcRoom({ role: 'sender', signalingUrl });
@@ -79,7 +84,14 @@ export function SenderView({ signalingUrl, onBack }: SenderViewProps) {
       <section className="panel">
         <div className="ph">
           <h2>Camera</h2>
-          <span className="badge red">● REC</span>
+          {rtc.isRecording ? (
+            <span className="badge red" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span className="dot connected" style={{ background: '#ff4444', boxShadow: '0 0 0 2px #ff444455', animation: 'pulse 1s infinite' }} />
+              REC {formatTime(rtc.recordingTime)}
+            </span>
+          ) : (
+            <span className="badge red">● REC</span>
+          )}
         </div>
 
         <div className="btn-row">
@@ -91,12 +103,13 @@ export function SenderView({ signalingUrl, onBack }: SenderViewProps) {
             Stop
           </button>
 
-          <button type="button" className="btn" onClick={rtc.startRecording}>
-            Start Recording
-          </button>
-
-          <button type="button" className="btn sec" onClick={rtc.stopRecording}>
-            Stop Recording
+          <button
+            type="button"
+            className={`btn ${rtc.isRecording ? 'sec' : ''}`}
+            onClick={rtc.isRecording ? rtc.stopRecording : rtc.startRecording}
+            style={rtc.isRecording ? { borderColor: '#ff4444', color: '#ff4444' } : {}}
+          >
+            {rtc.isRecording ? `⏹ Stop Recording` : '⏺ Record'}
           </button>
 
           <button type="button" className="btn sec" onClick={rtc.toggleCamera}>
@@ -115,6 +128,13 @@ export function SenderView({ signalingUrl, onBack }: SenderViewProps) {
           <div className="rrow">
             <span className="rkey">Streaming</span>
             <span className="rval active">{rtc.isStreaming ? 'yes' : 'no'}</span>
+          </div>
+
+          <div className="rrow">
+            <span className="rkey">Recording</span>
+            <span className="rval" style={rtc.isRecording ? { color: '#ff4444' } : {}}>
+              {rtc.isRecording ? `● ${formatTime(rtc.recordingTime)}` : 'no'}
+            </span>
           </div>
 
           <div className="rrow">

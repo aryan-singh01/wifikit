@@ -30,7 +30,20 @@ export function StreamVideo({ stream, muted = false, label, live = false }: Stre
     }
 
     stream.addEventListener('addtrack', tryPlay);
-    return () => stream.removeEventListener('addtrack', tryPlay);
+
+    // Safety net: if MediaRecorder.stop() or any other API pauses the element,
+    // immediately resume — the stream itself is still live.
+    const handlePause = () => {
+      if (stream && stream.active) {
+        video.play().catch(() => {});
+      }
+    };
+    video.addEventListener('pause', handlePause);
+
+    return () => {
+      stream.removeEventListener('addtrack', tryPlay);
+      video.removeEventListener('pause', handlePause);
+    };
   }, [stream]);
 
   const hasStream = Boolean(stream && stream.getTracks().length > 0);

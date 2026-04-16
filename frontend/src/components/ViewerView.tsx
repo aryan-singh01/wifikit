@@ -2,12 +2,17 @@
 
 import { useWebRtcRoom } from '@/hooks/useWebRtcRoom';
 import { StreamVideo } from '@/components/StreamVideo';
-import { QrPairing } from '@/components/QrPairing';
 
 type ViewerViewProps = {
   signalingUrl: string;
   onBack?: () => void;
 };
+
+function formatTime(seconds: number) {
+  const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+  const s = (seconds % 60).toString().padStart(2, '0');
+  return `${m}:${s}`;
+}
 
 export function ViewerView({ signalingUrl, onBack }: ViewerViewProps) {
   const rtc = useWebRtcRoom({ role: 'viewer', signalingUrl });
@@ -29,7 +34,14 @@ export function ViewerView({ signalingUrl, onBack }: ViewerViewProps) {
       <section className="panel">
         <div className="ph">
           <h2>Room</h2>
-          <span className="badge teal">Live</span>
+          {rtc.isRecording ? (
+            <span className="badge red" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span className="dot connected" style={{ background: '#ff4444', boxShadow: '0 0 0 2px #ff444455', animation: 'pulse 1s infinite' }} />
+              REC {formatTime(rtc.recordingTime)}
+            </span>
+          ) : (
+            <span className="badge teal">Live</span>
+          )}
         </div>
         <span className="field-label">Room ID</span>
         <input
@@ -45,14 +57,14 @@ export function ViewerView({ signalingUrl, onBack }: ViewerViewProps) {
           <button type="button" className="btn sec" onClick={rtc.disconnect}>
             Disconnect
           </button>
-
-          <button onClick={rtc.startRecording}>
-  Start Recording
-</button>
-
-<button onClick={rtc.stopRecording}>
-  Stop Recording
-</button>
+          <button
+            type="button"
+            className={`btn ${rtc.isRecording ? 'sec' : ''}`}
+            onClick={rtc.isRecording ? rtc.stopRecording : rtc.startRecording}
+            style={rtc.isRecording ? { borderColor: '#ff4444', color: '#ff4444' } : {}}
+          >
+            {rtc.isRecording ? `⏹ Stop Recording` : '⏺ Record'}
+          </button>
         </div>
         <div className="readout">
           <div className="rrow">
@@ -70,15 +82,14 @@ export function ViewerView({ signalingUrl, onBack }: ViewerViewProps) {
             <span className="rkey">Remote peer</span>
             <span className="rval amber">{rtc.otherPeerId ?? '—'}</span>
           </div>
+          <div className="rrow">
+            <span className="rkey">Recording</span>
+            <span className="rval" style={rtc.isRecording ? { color: '#ff4444' } : {}}>
+              {rtc.isRecording ? `● ${formatTime(rtc.recordingTime)}` : 'no'}
+            </span>
+          </div>
         </div>
         {rtc.error ? <div className="err">{rtc.error}</div> : null}
-      </section>
-
-      <section className="panel">
-        <div className="ph">
-          <h2>Pair via QR</h2>
-        </div>
-        <QrPairing roomId={rtc.roomId} />
       </section>
 
       <StreamVideo stream={rtc.remoteStream} label="Remote Stream" live />
